@@ -1,39 +1,64 @@
-name: 自动同步上游 MiSub
+name: 同步上游 MiSub
+
+# 把 imzyb/MiSub 的更新同步到这个 fork。
+# 同步产生的 push 会触发 Cloudflare Pages 的 Git 集成，自动重新构建部署。
 
 on:
   schedule:
-    # 每天北京时间 08:00（UTC 00:00）检查一次
-    - cron: '0 0 * * *'
-  workflow_dispatch:  # 可在 Actions 页面手动触发
+    # 每 6 小时检查一次（UTC 整点，北京时间 08/14/20/02 点）
+    - cron: '0 */6 * * *'
+  workflow_dispatch:
 
 permissions:
-  contents: write  # 允许 push 回 fork
+  contents: write
+
+concurrency:
+  group: sync-upstream
+  cancel-in-progress: false
 
 jobs:
   sync:
     runs-on: ubuntu-latest
     steps:
-      - name: 检出仓库
+      - name: 检出 fork
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
+          ref: main
 
-      - name: 配置 git 身份
+      - name: 同步上游
         run: |
+          set -euo pipefail
+
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
-      - name: 同步上游 imzyb/MiSub
-        run: |
-          git remote add upstream https://github.com/imzyb/MiSub.git
-          git fetch upstream main
+          git remote add upstream https://github.com/imzyb/MiSub.git 2>/dev/null \
+            || git remote set-url upstream https://github.com/imzyb/MiSub.git
+
+          git fetch --no-tags upstream main
+
           LOCAL=$(git rev-parse HEAD)
           REMOTE=$(git rev-parse upstream/main)
+
+          echo "本地:   $LOCAL"
+          echo "上游:   $REMOTE"
+
           if [ "$LOCAL" = "$REMOTE" ]; then
             echo "✅ 已是最新，无需同步"
-          else
-            echo "🔁 检测到上游更新，开始同步..."
-            git merge upstream/main --no-edit
-            git push origin main
-            echo "✅ 已推送，Cloudflare Pages 将自动重新构建"
+            exit 0
           fi
+
+          echo "🔁 检测到上游更新，开始同步"
+
+          # 这个 fork 保持与上游完全一致，不做本地改动，所以优先快进；
+          # 快进不了（比如上游改写了历史）就直接对齐到上游。
+          if git merge-base --is-ancestor "$LOCAL" "$REMOTE"; then
+            git merge --ff-only upstream/main
+          else
+            echo "⚠️ 无法快进，强制对齐到上游"
+            git reset --hard upstream/main
+          fi
+
+          git push origin main
+          echo "✅ 已推送，Cloudflare Pages 将自动构建部署"
