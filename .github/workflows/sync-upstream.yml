@@ -1,11 +1,15 @@
 name: 同步上游 MiSub
 
-# 把 imzyb/MiSub 的更新同步到这个 fork。
+# 把 imzyb/MiSub 的更新合并进这个 fork。
 # 同步产生的 push 会触发 Cloudflare Pages 的 Git 集成，自动重新构建部署。
+#
+# 注意：这个 fork 的 main 上额外承载着本 workflow 文件本身，
+# 所以永远不可能与上游「完全一致」。同步必须用 merge，不能用 reset，
+# 否则会把 workflow 自己删掉，push 也会被拒（non-fast-forward）。
 
 on:
   schedule:
-    # 每 6 小时检查一次（UTC 整点，北京时间 08/14/20/02 点）
+    # 每 6 小时检查一次（UTC 整点）
     - cron: '0 */6 * * *'
   workflow_dispatch:
 
@@ -45,20 +49,18 @@ jobs:
           echo "上游:   $REMOTE"
 
           if [ "$LOCAL" = "$REMOTE" ]; then
-            echo "✅ 已是最新，无需同步"
+            echo "✅ 与上游完全一致"
             exit 0
           fi
 
-          echo "🔁 检测到上游更新，开始同步"
-
-          # 这个 fork 保持与上游完全一致，不做本地改动，所以优先快进；
-          # 快进不了（比如上游改写了历史）就直接对齐到上游。
-          if git merge-base --is-ancestor "$LOCAL" "$REMOTE"; then
-            git merge --ff-only upstream/main
-          else
-            echo "⚠️ 无法快进，强制对齐到上游"
-            git reset --hard upstream/main
+          # 上游已经是本地的祖先 → 本地只是多了 workflow 提交，无需同步
+          if git merge-base --is-ancestor "$REMOTE" "$LOCAL"; then
+            echo "✅ 上游已在本地历史中（本地仅多出 workflow 提交），无需同步"
+            exit 0
           fi
+
+          echo "🔁 检测到上游更新，开始合并"
+          git merge --no-edit upstream/main
 
           git push origin main
           echo "✅ 已推送，Cloudflare Pages 将自动构建部署"
